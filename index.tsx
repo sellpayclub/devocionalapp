@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
-import { GoogleGenAI, Type, Schema, Modality } from "@google/genai";
+import OpenAI from "openai";
 import { 
   BookOpen, Heart, Sun, ArrowLeft, Share2, Sparkles, Feather, 
   Bell, PenLine, Save, Trash2, Wind, Shield, Anchor, Zap, Coffee, 
@@ -8,7 +8,7 @@ import {
   Volume2, Loader, Square, Download, X, Copy
 } from "lucide-react";
 
-// --- Types & Schema ---
+// --- Types ---
 
 interface DevotionalContent {
   title: string;
@@ -26,50 +26,6 @@ interface SavedNote {
   content: DevotionalContent;
   userNote: string;
   timestamp: number;
-}
-
-const devotionalSchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    title: { type: Type.STRING, description: "Frase curta e emocional." },
-    verseReference: { type: Type.STRING, description: "Livro e Capítulo (ex: Salmos 23:1)." },
-    verseText: { type: Type.STRING, description: "O texto bíblico completo." },
-    reflection: { type: Type.STRING, description: "Reflexão profunda, 3 a 6 parágrafos, tom acolhedor e terapêutico." },
-    application: { type: Type.STRING, description: "Uma atitude prática para o dia." },
-    prayer: { type: Type.STRING, description: "Uma oração curta e direta." },
-  },
-  required: ["title", "verseReference", "verseText", "reflection", "application", "prayer"],
-};
-
-// --- Audio Helpers ---
-
-function base64ToUint8Array(base64: string) {
-  const binaryString = atob(base64);
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes;
-}
-
-async function decodeAudioData(
-  data: Uint8Array,
-  ctx: AudioContext,
-  sampleRate: number = 24000,
-  numChannels: number = 1,
-): Promise<AudioBuffer> {
-  const dataInt16 = new Int16Array(data.buffer);
-  const frameCount = dataInt16.length / numChannels;
-  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
-
-  for (let channel = 0; channel < numChannels; channel++) {
-    const channelData = buffer.getChannelData(channel);
-    for (let i = 0; i < frameCount; i++) {
-      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
-    }
-  }
-  return buffer;
 }
 
 // --- Icons Map for Topics ---
@@ -209,50 +165,43 @@ const App = () => {
         ${content.prayer}
       `;
 
-      // 2. Init API
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      // 2. Init OpenAI Client
+      const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+        dangerouslyAllowBrowser: true // Required for client-side app
+      });
       
       // 3. Generate Audio
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: textToRead }] }],
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: 'Puck' }, // Puck is usually calm/male
-            },
-          },
-        },
+      const mp3 = await openai.audio.speech.create({
+        model: "tts-1",
+        voice: "onyx", // Deep, calm male voice suitable for reading
+        input: textToRead,
       });
 
-      // 4. Decode and Play
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      const buffer = await mp3.arrayBuffer();
       
-      if (base64Audio) {
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({sampleRate: 24000});
-        audioContextRef.current = audioCtx;
+      // 4. Decode and Play
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioCtx;
 
-        const audioBytes = base64ToUint8Array(base64Audio);
-        const audioBuffer = await decodeAudioData(audioBytes, audioCtx, 24000, 1);
-        
-        const source = audioCtx.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioCtx.destination);
-        
-        source.onended = () => {
-          setIsPlaying(false);
-          stopAudio(); // Clean up context
-        };
+      const audioBuffer = await audioCtx.decodeAudioData(buffer);
+      
+      const source = audioCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioCtx.destination);
+      
+      source.onended = () => {
+        setIsPlaying(false);
+        stopAudio(); // Clean up context
+      };
 
-        source.start();
-        audioSourceRef.current = source;
-        setIsPlaying(true);
-      }
+      source.start();
+      audioSourceRef.current = source;
+      setIsPlaying(true);
 
     } catch (error) {
       console.error("Error generating audio:", error);
-      alert("Não foi possível gerar o áudio agora.");
+      alert("Não foi possível gerar o áudio agora. Verifique sua chave API ou conexão.");
     } finally {
       setIsAudioLoading(false);
     }
@@ -320,7 +269,6 @@ const App = () => {
     setUserNote("");
     
     // --- DAILY DEVOTIONAL CACHING LOGIC ---
-    // If no topic (Daily Devotional), check storage first
     if (!topic) {
       const todayDate = new Date().toLocaleDateString('pt-BR');
       const cacheKey = `daily_devotional_${todayDate}`;
@@ -332,7 +280,7 @@ const App = () => {
           setContent(parsed);
           setCurrentTopic("Devocional do Dia");
           setView("reading");
-          return; // Exit early, do not call API
+          return;
         } catch (e) {
           console.error("Cache corrupted");
           localStorage.removeItem(cacheKey);
@@ -340,13 +288,15 @@ const App = () => {
       }
     }
 
-    // If we are here, we need to generate (either it's a Topic OR Daily wasn't cached)
     setIsLoading(true);
     setCurrentTopic(topic || "Devocional do Dia");
     setView("reading");
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+        dangerouslyAllowBrowser: true
+      });
       
       const dateStr = new Date().toLocaleDateString('pt-BR', { 
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' 
@@ -368,26 +318,31 @@ const App = () => {
         - Sempre escreva como se estivesse conversando com alguém cansado emocionalmente.
         - Sem moralismo, sem julgamento.
 
-        ESTRUTURA OBRIGATÓRIA (JSON):
-        - Retorne APENAS o JSON conforme o schema.
-        - A reflexão deve ter entre 3 a 6 parágrafos curtos.
-        - O versículo deve vir acompanhado do texto bíblico.
+        ESTRUTURA DE RESPOSTA (JSON):
+        Você DEVE retornar APENAS um objeto JSON com as seguintes chaves:
+        {
+          "title": "Frase curta e emocional",
+          "verseReference": "Livro e Capítulo (ex: Salmos 23:1)",
+          "verseText": "O texto bíblico completo",
+          "reflection": "Reflexão profunda, 3 a 6 parágrafos, tom acolhedor e terapêutico",
+          "application": "Uma atitude prática para o dia",
+          "prayer": "Uma oração curta e direta"
+        }
         
         Evite repetir temas recentes. Busque sempre uma nova abordagem emocional.
       `;
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: promptContext,
-        config: {
-          systemInstruction: systemInstruction,
-          responseMimeType: "application/json",
-          responseSchema: devotionalSchema,
-          temperature: 0.7,
-        },
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini", // Cost effective, high quality
+        messages: [
+          { role: "system", content: systemInstruction },
+          { role: "user", content: promptContext }
+        ],
+        response_format: { type: "json_object" }
       });
 
-      const text = response.text;
+      const text = response.choices[0].message.content;
+      
       if (text) {
         const data = JSON.parse(text) as DevotionalContent;
         setContent(data);
@@ -401,11 +356,12 @@ const App = () => {
       }
     } catch (error) {
       console.error("Erro ao gerar devocional", error);
+      // Fallback content in case of error (e.g., quota exceeded or network issue)
       setContent({
         title: "Um momento de silêncio",
         verseReference: "Salmos 46:10",
         verseText: "Aquietai-vos, e sabei que eu sou Deus.",
-        reflection: "Às vezes, a tecnologia falha, mas a presença de Deus permanece constante. Respire fundo agora. Talvez este erro seja um convite para apenas fechar os olhos e sentir a paz que excede todo o entendimento.\n\nDeus está no silêncio também. Ele está no espaço entre um pensamento e outro. Sinta-se abraçado pelo Criador agora mesmo.",
+        reflection: "Às vezes, a tecnologia falha, mas a presença de Deus permanece constante. Respire fundo agora. Talvez este erro seja um convite para apenas fechar os olhos e sentir a paz que excede todo o entendimento.\n\nDeus está no silêncio também. Ele está no espaço entre um pensamento e outro. Sinta-se abraçado pelo Criador agora mesmo. (Verifique sua conexão ou a chave de API)",
         application: "Feche os olhos por 1 minuto e apenas respire.",
         prayer: "Senhor, obrigado por estar comigo mesmo quando as coisas não saem como planejado. Amém."
       });
