@@ -1,12 +1,43 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
-import OpenAI from "openai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { 
   BookOpen, Heart, Sun, ArrowLeft, Share2, Sparkles, Feather, 
   Bell, PenLine, Save, Trash2, Wind, Shield, Anchor, Zap, Coffee, 
   Smile, UserPlus, Mountain, CloudRain, Lock, Clock, Menu,
   Volume2, Loader, Square, Download, X, Copy
 } from "lucide-react";
+
+// --- Helpers for Audio ---
+
+function decode(base64: string) {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function decodeAudioData(
+  data: Uint8Array,
+  ctx: AudioContext,
+  sampleRate: number = 24000,
+  numChannels: number = 1
+): Promise<AudioBuffer> {
+  const dataInt16 = new Int16Array(data.buffer);
+  const frameCount = dataInt16.length / numChannels;
+  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+
+  for (let channel = 0; channel < numChannels; channel++) {
+    const channelData = buffer.getChannelData(channel);
+    for (let i = 0; i < frameCount; i++) {
+      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
+    }
+  }
+  return buffer;
+}
 
 // --- Types ---
 
@@ -165,26 +196,37 @@ const App = () => {
         ${content.prayer}
       `;
 
-      // 2. Init OpenAI Client
-      const openai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
-        dangerouslyAllowBrowser: true // Required for client-side app
-      });
+      // 2. Init Gemini Client
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
-      // 3. Generate Audio
-      const mp3 = await openai.audio.speech.create({
-        model: "tts-1",
-        voice: "onyx", // Deep, calm male voice suitable for reading
-        input: textToRead,
+      // 3. Generate Audio using Gemini TTS
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: textToRead }] }],
+        config: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Kore' }, // Voices: Puck, Charon, Kore, Fenrir, Zephyr
+            },
+          },
+        },
       });
 
-      const buffer = await mp3.arrayBuffer();
-      
-      // 4. Decode and Play
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      // 4. Extract Audio Data
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!base64Audio) throw new Error("No audio data returned");
+
+      // 5. Decode and Play
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       audioContextRef.current = audioCtx;
 
-      const audioBuffer = await audioCtx.decodeAudioData(buffer);
+      const audioBuffer = await decodeAudioData(
+        decode(base64Audio),
+        audioCtx,
+        24000,
+        1,
+      );
       
       const source = audioCtx.createBufferSource();
       source.buffer = audioBuffer;
@@ -293,10 +335,7 @@ const App = () => {
     setView("reading");
 
     try {
-      const openai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY,
-        dangerouslyAllowBrowser: true
-      });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       
       const dateStr = new Date().toLocaleDateString('pt-BR', { 
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' 
@@ -319,29 +358,36 @@ const App = () => {
         - Sem moralismo, sem julgamento.
 
         ESTRUTURA DE RESPOSTA (JSON):
-        Você DEVE retornar APENAS um objeto JSON com as seguintes chaves:
-        {
-          "title": "Frase curta e emocional",
-          "verseReference": "Livro e Capítulo (ex: Salmos 23:1)",
-          "verseText": "O texto bíblico completo",
-          "reflection": "Reflexão profunda, 3 a 6 parágrafos, tom acolhedor e terapêutico",
-          "application": "Uma atitude prática para o dia",
-          "prayer": "Uma oração curta e direta"
-        }
+        O campo 'reflection' deve ter 3 a 6 parágrafos, formatado como um único texto (use quebras de linha \\n).
         
         Evite repetir temas recentes. Busque sempre uma nova abordagem emocional.
       `;
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini", // Cost effective, high quality
-        messages: [
-          { role: "system", content: systemInstruction },
-          { role: "user", content: promptContext }
-        ],
-        response_format: { type: "json_object" }
+      // Define Schema using Google GenAI Type
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING, description: "Frase curta e emocional" },
+          verseReference: { type: Type.STRING, description: "Livro e Capítulo (ex: Salmos 23:1)" },
+          verseText: { type: Type.STRING, description: "O texto bíblico completo" },
+          reflection: { type: Type.STRING, description: "Reflexão profunda, 3 a 6 parágrafos" },
+          application: { type: Type.STRING, description: "Uma atitude prática para o dia" },
+          prayer: { type: Type.STRING, description: "Uma oração curta e direta" }
+        },
+        required: ["title", "verseReference", "verseText", "reflection", "application", "prayer"]
+      };
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview", 
+        contents: promptContext,
+        config: {
+          systemInstruction: systemInstruction,
+          responseMimeType: "application/json",
+          responseSchema: responseSchema
+        }
       });
 
-      const text = response.choices[0].message.content;
+      const text = response.text;
       
       if (text) {
         const data = JSON.parse(text) as DevotionalContent;
@@ -356,12 +402,12 @@ const App = () => {
       }
     } catch (error) {
       console.error("Erro ao gerar devocional", error);
-      // Fallback content in case of error (e.g., quota exceeded or network issue)
+      // Fallback content in case of error
       setContent({
         title: "Um momento de silêncio",
         verseReference: "Salmos 46:10",
         verseText: "Aquietai-vos, e sabei que eu sou Deus.",
-        reflection: "Às vezes, a tecnologia falha, mas a presença de Deus permanece constante. Respire fundo agora. Talvez este erro seja um convite para apenas fechar os olhos e sentir a paz que excede todo o entendimento.\n\nDeus está no silêncio também. Ele está no espaço entre um pensamento e outro. Sinta-se abraçado pelo Criador agora mesmo. (Verifique sua conexão ou a chave de API)",
+        reflection: "Às vezes, a tecnologia falha, mas a presença de Deus permanece constante. Respire fundo agora. Talvez este erro seja um convite para apenas fechar os olhos e sentir a paz que excede todo o entendimento.\n\nDeus está no silêncio também. Ele está no espaço entre um pensamento e outro. Sinta-se abraçado pelo Criador agora mesmo. (Verifique sua conexão ou a chave de API do Gemini)",
         application: "Feche os olhos por 1 minuto e apenas respire.",
         prayer: "Senhor, obrigado por estar comigo mesmo quando as coisas não saem como planejado. Amém."
       });
@@ -651,7 +697,7 @@ const App = () => {
                 ) : (
                   <>
                     <Volume2 size={20} className="text-amber-600" />
-                    <span className="font-[Lora] text-sm">Ouvir Devocional</span>
+                    <span className="font-[Lora] text-sm">Ouvir Devocional (Gemini)</span>
                   </>
                 )}
               </button>

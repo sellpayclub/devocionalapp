@@ -12,6 +12,10 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Babel for in-browser compilation of TSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
     <style>
       body {
         font-family: 'Lora', serif;
@@ -37,14 +41,25 @@
                     url('https://images.unsplash.com/photo-1500964757637-c85e8a162699?q=80&w=2103&auto=format&fit=crop') center/cover;
       }
     </style>
+
+    <!-- Polyfill for process.env -->
+    <script>
+      window.process = {
+        env: {
+          API_KEY: "AIzaSyAtnZ2mBww8qT0efwJBzPqWRdNU-V-ddyQ" 
+        }
+      };
+    </script>
+
   <script type="importmap">
 {
   "imports": {
-    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react": "https://esm.sh/react@^19.2.3",
-    "openai": "https://esm.sh/openai@4.28.0",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/"
+    "react": "https://esm.sh/react@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "@google/genai": "https://esm.sh/@google/genai@0.1.1",
+    "lucide-react": "https://esm.sh/lucide-react@0.344.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "react/": "https://esm.sh/react@^19.2.3/"
   }
 }
 </script>
@@ -64,6 +79,7 @@
 </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
+    <!-- Note: type="text/babel" is crucial for browser to compile TSX -->
+    <script type="text/babel" data-presets="react,typescript" src="/index.tsx"></script>
   </body>
 </html>

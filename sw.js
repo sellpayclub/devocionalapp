@@ -1,4 +1,4 @@
-const CACHE_NAME = 'devocional-v3';
+const CACHE_NAME = 'devocional-v8';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
