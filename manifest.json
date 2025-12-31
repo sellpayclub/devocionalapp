@@ -1,0 +1,21 @@
+{
+  "name": "Meu Terapeuta: DEUS",
+  "short_name": "Devocional",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FDFCF5",
+  "theme_color": "#FDFCF5",
+  "description": "Um devocional diário para acalmar o coração.",
+  "icons": [
+    {
+      "src": "https://images.unsplash.com/photo-1500964757637-c85e8a162699?q=80&w=192&auto=format&fit=crop",
+      "sizes": "192x192",
+      "type": "image/jpeg"
+    },
+    {
+      "src": "https://images.unsplash.com/photo-1500964757637-c85e8a162699?q=80&w=512&auto=format&fit=crop",
+      "sizes": "512x512",
+      "type": "image/jpeg"
+    }
+  ]
+}
